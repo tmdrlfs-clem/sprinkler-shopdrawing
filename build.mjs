@@ -27,6 +27,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   mkdirSync(dirname(out), { recursive: true });
   const html = buildHtml();
   writeFileSync(out, html);
+  // Also written to the repo root: GitHub Pages serves this branch's root
+  // directly, with no build step of its own.
+  writeFileSync(join(root, "index.html"), html);
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
   console.log(`built ${out}  (${order.length} sources, ${kb} KB)`);
 }
