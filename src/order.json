@@ -1,0 +1,16 @@
+[
+  "src/00-preamble.js",
+  "src/core/10-state.js",
+  "src/core/20-scale.js",
+  "src/core/30-vectors.js",
+  "src/core/40-geometry.js",
+  "src/core/50-layout.js",
+  "src/core/60-fill.js",
+  "src/core/70-checks.js",
+  "src/ui/10-render.js",
+  "src/ui/20-input.js",
+  "src/ui/30-actions.js",
+  "src/ui/40-panels.js",
+  "src/ui/50-exports.js",
+  "src/ui/60-files.js"
+]

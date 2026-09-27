@@ -1,0 +1,12 @@
+{
+  "name": "sprinkler-shop-drawing-drafter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read a PDF drawing, size the rooms, lay out sprinkler heads, and write the marked-up PDF back out.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && node --test \"tests/*.test.mjs\"",
+    "watch": "node --test --watch \"tests/*.test.mjs\""
+  }
+}
