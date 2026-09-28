@@ -440,7 +440,7 @@ function fillApply(kind){
   const n=page().rooms.length+1;
   const room={
     id:uid("r_"), name:"Room "+String(n).padStart(2,"0"), polygon:r.polygon,
-    hazard:state.lastHazard||"OH1", headType:"sp-drop", ceilingH:2.7, ceilingType:"flat",
+    hazard:state.lastHazard||"OH1", headType:devId(CEILING_HEAD[kind]||"sp-drop"), ceilingH:2.7, ceilingType:"flat",
     autoLayout:true, gridAngle:0, gridDx:0, gridDy:0, notes:"",
     ceiling:kind, tileSnap:kind==="tile"
   };

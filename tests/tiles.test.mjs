@@ -106,3 +106,14 @@ test("a tile ceiling with no grid drawn still lays out and says so", () => {
   assert.ok(heads.length > 0, "the room is still laid out");
   assert.equal(A.analyse(room.id).gaps.length, 0);
 });
+
+test("the ceiling picks its usual head, but never overrides the designer's", () => {
+  const A = loadCore();
+  const r = { headType: "sp-drop", ceiling: "tile" };
+  assert.equal(A.call("headForCeiling", r, "gib"), "sp-conc", "GIB takes a concealed head");
+  assert.equal(A.call("headForCeiling", { headType: "sp-conc", ceiling: "gib" }, "tile"), "sp-drop");
+  assert.equal(A.call("headForCeiling", { headType: "sp-ec", ceiling: "tile" }, "gib"), "sp-ec",
+    "a head the designer chose stays when the ceiling changes");
+  assert.equal(A.call("headForCeiling", { headType: "pend", ceiling: "tile" }, "gib"), "sp-conc",
+    "a legacy id for the default still counts as the default");
+});

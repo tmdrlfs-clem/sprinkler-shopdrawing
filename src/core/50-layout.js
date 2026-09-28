@@ -417,6 +417,17 @@ function bestPeriod(lines, mm, diag){
 function ceilingOf(room){ return room.ceiling || (room.tileSnap===false ? "gib" : "tile"); }
 function isTiled(room){ return ceilingOf(room)==="tile"; }
 
+/* The head each ceiling usually takes, as on the as-built drawings: a
+   semi-recessed pendent through a tile, a concealed plate in GIB. Switching
+   the ceiling only moves the head with it while the room is still on the
+   old ceiling's default; a head the designer picked is left alone. */
+const CEILING_HEAD = {tile:"sp-drop", gib:"sp-conc"};
+function headForCeiling(room, kind){
+  const was = CEILING_HEAD[ceilingOf(room)];
+  if(room.headType && devId(room.headType)!==was) return room.headType;
+  return devId(CEILING_HEAD[kind] || "sp-drop");
+}
+
 function tileDiag(room){ return (TILE_CACHE.get(room.id)||{}).diag || null; }
 
 function detectTiles(room){
