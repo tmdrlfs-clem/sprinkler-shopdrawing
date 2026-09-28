@@ -1198,15 +1198,25 @@ function headWallDims(h, room){
    ────────────────────────────────────────────────────────────── */
 const TILE = {sizes:[600,1200], fractions:[1/3, 1/2, 2/3],
               prefer:{"0.3333":1, "0.5000":0.6, "0.6667":1},
-              tol:0.06, minLines:4, strength:0.55};
+              tol:0.06, minLines:4, strength:0.55, reachMm:4000, stretch:0.04};
 const TILE_CACHE = new Map();
 
-function tileLines(room, ang, axis, mm){
+function tileLines(room, ang, axis, mm, grow){
   /* Ceiling grid lines usually run right across the floor plate, so their
      midpoint lands in some other room entirely. Judge a line by how much of
-     it lies inside this room, not by where its centre happens to be. */
+     it lies inside this room, not by where its centre happens to be. With
+     `grow`, judge it inside the room's frame widened by that much instead. */
   if(!VEC.ready) return [];
-  const xs=room.polygon.map(q=>q.x), ys=room.polygon.map(q=>q.y);
+  let inRegion = p => pointInPoly(p, room.polygon);
+  let pts = room.polygon;
+  if(grow){
+    const rs=room.polygon.map(q=>rotTo(q, ang));
+    const X0=Math.min(...rs.map(q=>q.x))-grow, X1=Math.max(...rs.map(q=>q.x))+grow;
+    const Y0=Math.min(...rs.map(q=>q.y))-grow, Y1=Math.max(...rs.map(q=>q.y))+grow;
+    inRegion = p => { const r=rotTo(p, ang); return r.x>=X0 && r.x<=X1 && r.y>=Y0 && r.y<=Y1; };
+    pts = [{x:X0,y:Y0},{x:X1,y:Y0},{x:X1,y:Y1},{x:X0,y:Y1}].map(q=>rotFrom(q, ang));
+  }
+  const xs=pts.map(q=>q.x), ys=pts.map(q=>q.y);
   const bx0=Math.min(...xs), bx1=Math.max(...xs), by0=Math.min(...ys), by1=Math.max(...ys);
   const minInside = 300/mm;
   const want = axis===0 ? ang+Math.PI/2 : ang;
@@ -1226,7 +1236,7 @@ function tileLines(room, ang, axis, mm){
     let inside=0, sum=0;
     for(let t=0;t<=k;t++){
       const px=x1+dx*t/k, py=y1+dy*t/k;
-      if(!pointInPoly({x:px,y:py}, room.polygon)) continue;
+      if(!inRegion({x:px,y:py})) continue;
       inside++;
       sum += axis===0 ? rotTo({x:px,y:py}, ang).x : rotTo({x:px,y:py}, ang).y;
     }
@@ -1238,27 +1248,63 @@ function tileLines(room, ang, axis, mm){
   return out;
 }
 
+/* A corridor or a narrow room holds too few grid lines one way to show a
+   steady pitch: a 3.6 m corridor under 1200 tiles has two or three. The grid
+   runs on past the walls, so read that axis from the lines around the room
+   instead — but only if the lines that are inside the room sit on it, so a
+   neighbour with a different ceiling is never borrowed from. */
+function borrowedPeriod(room, ang, axis, mm){
+  const wide = bestPeriod(tileLines(room, ang, axis, mm, TILE.reachMm/mm), mm);
+  if(!wide) return null;
+  const own = tileLines(room, ang, axis, mm);
+  let on=0, all=0;
+  for(const l of own){
+    const f=(l.pos-wide.origin)/wide.P, off=Math.abs(f-Math.round(f));
+    all+=l.len; if(off<=TILE.tol) on+=l.len;
+  }
+  if(all && on < all*0.75) return null;
+  return {...wide, borrowed:true};
+}
+
 function bestPeriod(lines, mm, diag){
   // strongest steady pitch among the configured tile sizes
   let best=null;
   if(diag) diag.lines = lines.length;
-  for(const sizeMm of TILE.sizes){
-    const P=sizeMm/mm;
-    let sx=0, sy=0, wsum=0, distinct=new Set();
+  /* The pitch is measured, not assumed. A scale set from two clicks is
+     rarely exact, and 1% out puts a head 70 mm off the real tile across a
+     14 m room while it still reads as snapped. So each tile size is tried
+     over a few percent either way, coarse then fine, and the pitch the
+     lines actually repeat at is the one kept. */
+  const coherence = P => {
+    let sx=0, sy=0, wsum=0;
     for(const l of lines){
       const ph = 2*Math.PI*(l.pos/P);
       const w = Math.min(l.len, P*4);
       sx += Math.cos(ph)*w; sy += Math.sin(ph)*w; wsum += w;
-      distinct.add(Math.round(l.pos/P*24));
     }
-    if(!wsum) continue;
-    const strength = Math.hypot(sx,sy)/wsum;
+    return wsum ? {sx, sy, strength: Math.hypot(sx,sy)/wsum} : null;
+  };
+  for(const sizeMm of TILE.sizes){
+    const P0=sizeMm/mm;
+    let top=null;
+    const scan=(f0, f1, step)=>{
+      for(let f=f0; f<=f1+1e-9; f+=step){
+        const c=coherence(P0*f);
+        if(c && (!top || c.strength>top.strength)) top={...c, f};
+      }
+    };
+    scan(1-TILE.stretch, 1+TILE.stretch, 0.004);
+    if(top) scan(top.f-0.004, top.f+0.004, 0.0002);
+    if(!top) continue;
+    const P=P0*top.f, strength=top.strength;
+    const distinct=new Set();
+    for(const l of lines) distinct.add(Math.round(l.pos/P*24));
     if(diag && (!diag.best || strength>diag.best.strength))
       diag.best = {sizeMm, strength, lines: distinct.size};
     if(distinct.size < TILE.minLines || strength < TILE.strength) continue;
-    let phase = Math.atan2(sy,sx)/(2*Math.PI);
+    let phase = Math.atan2(top.sy,top.sx)/(2*Math.PI);
     if(phase<0) phase+=1;
-    const cand = {sizeMm, P, origin: phase*P, strength, lines: distinct.size};
+    const cand = {sizeMm, P, measuredMm: P*mm, origin: phase*P, strength, lines: distinct.size};
     if(!best || cand.strength*cand.sizeMm > best.strength*best.sizeMm) best=cand;
   }
   return best;
@@ -1302,8 +1348,19 @@ function detectTiles(room){
   if(hit && Math.abs(hit.sig-sig)<1e-6) return hit.t;
 
   const du={}, dv={};
-  const u=bestPeriod(tileLines(room, ang, 0, mm), mm, du);
-  const v=bestPeriod(tileLines(room, ang, 1, mm), mm, dv);
+  let u=bestPeriod(tileLines(room, ang, 0, mm), mm, du);
+  let v=bestPeriod(tileLines(room, ang, 1, mm), mm, dv);
+  /* The grid read over the room and its surroundings is the steadier one:
+     inside a narrow room the fittings' own edges can outnumber the grid
+     lines and fake a 600 pitch under 1200 tiles. It is only used where the
+     room's own lines sit on it, so a room with a ceiling of its own keeps
+     it. */
+  const bu=borrowedPeriod(room, ang, 0, mm), bv=borrowedPeriod(room, ang, 1, mm);
+  const pick=(own, wide)=> !wide ? own
+    : own && own.sizeMm===wide.sizeMm ? {...wide, borrowed:false} : wide;
+  const ownAny = u || v || tileLines(room, ang, 0, mm).length + tileLines(room, ang, 1, mm).length >= 2;
+  u=pick(u, bu); v=pick(v, bv);
+  if(!ownAny) u=v=null;
   const t = (u&&v) ? {ang, u, v} : null;
   TILE_CACHE.set(room.id, {sig, t, diag:{across:du, down:dv}});
   return t;
@@ -1356,7 +1413,7 @@ function onTilePoint(h, t, fracs, mm){
    designer has marked, kept clear by a set distance. This keeps heads off
    fittings. It does not model a fitting shadowing the spray.
    ────────────────────────────────────────────────────────────── */
-const OBST = {clearMm:300, minSpanMm:100, edgeTolMm:25, maxShare:0.5};
+const OBST = {clearMm:300, fitClearMm:150, minSpanMm:100, edgeTolMm:25, maxShare:0.5};
 const OCC_CACHE = new Map();
 
 function obstacleClearMm(){ return state.doc.obstacleClearMm ?? OBST.clearMm; }
@@ -1393,7 +1450,7 @@ function tileOccupancy(room){
   if(hit && hit.sig===sig) return hit.res;
 
   const tol=OBST.edgeTolMm/mm, minSpan=OBST.minSpanMm/mm;
-  const found=new Set();
+  const found=new Set(), boxes=new Map();
   const S=VEC.segs, SH=VEC.shapes, n=VEC.ready ? VEC.count : 0;
   for(let k=0; n && k<SH.length; k+=2){
     const a=SH[k], b=Math.min(SH[k+1], n);
@@ -1412,13 +1469,21 @@ function tileOccupancy(room){
       const U0=t.u.origin+i0*t.u.P, V0=t.v.origin+j0*t.v.P;
       if(Math.abs(u0-U0)<tol && Math.abs(u1-U0-t.u.P)<tol && Math.abs(v0-V0)<tol && Math.abs(v1-V0-t.v.P)<tol) continue;
     }
-    for(let i=i0;i<=i1;i++) for(let j=j0;j<=j1;j++) found.add(i+","+j);
+    for(let i=i0;i<=i1;i++) for(let j=j0;j<=j1;j++){
+      const key=i+","+j;
+      found.add(key);
+      let b=boxes.get(key); if(!b){ b=[]; boxes.set(key,b); }
+      b.push({u0,u1,v0,v1});
+    }
   }
   const tilesInRoom = polyArea(room.polygon)/(t.u.P*t.v.P);
   const patterned = found.size > Math.max(4, tilesInRoom*OBST.maxShare);
   const taken = patterned ? new Set() : new Set(found);
   for(const [key,v] of Object.entries(marks)){ if(v) taken.add(key); else taken.delete(key); }
-  const res = {t, taken, found: found.size, patterned};
+  // a tile the designer marked is taken whole; one read from the drawing
+  // only where its fittings are
+  const whole=new Set(Object.entries(marks).filter(([,v])=>v).map(([k])=>k));
+  const res = {t, taken, boxes, whole, found: found.size, patterned};
   OCC_CACHE.set(room.id, {sig, res});
   return res;
 }
@@ -1431,7 +1496,16 @@ function blockedAt(room, p){
     for(const o of obs) if(pointInPoly(p, o.polygon) || distToPoly(p, o.polygon) < clear) return true;
   }
   const occ=tileOccupancy(room);
-  return !!(occ && occ.taken.size && occ.taken.has(tileCell(p, occ.t).key));
+  if(!occ || !occ.taken.size) return false;
+  const key=tileCell(p, occ.t).key;
+  if(!occ.taken.has(key)) return false;
+  const b=occ.boxes.get(key);
+  if(occ.whole.has(key) || !b) return true;
+  /* A small fitting leaves the rest of a long tile free: a grille at one
+     end of a 1200 tile, a head at the far third. Only the ground within
+     OBST.fitClearMm of the fitting itself is out. */
+  const r=rotTo(p, occ.t.ang), c=OBST.fitClearMm/mmPerPx();
+  return b.some(q=> r.x>=q.u0-c && r.x<=q.u1+c && r.y>=q.v0-c && r.y<=q.v1+c);
 }
 
 function obstRect(a, b){
@@ -1487,11 +1561,8 @@ function snapToTiles(room, heads, rule, mm, ang){
     for(let j=0;j<k;j++) pts.push({x:a.x+(b.x-a.x)*j/k, y:a.y+(b.y-a.y)*j/k}), rad.push(halfWall);
   }
   const covered = list => {
-    for(let i=0;i<pts.length;i++){
-      let ok=false;
-      for(const h of list) if(headCovers(pts[i].x,pts[i].y,h,ang,rad[i],model)){ ok=true; break; }
-      if(!ok) return false;
-    }
+    const idx=headIndex(list, half);
+    for(let i=0;i<pts.length;i++) if(!coveredAt(idx, pts[i].x, pts[i].y, ang, rad[i], model)) return false;
     return true;
   };
 
@@ -1504,19 +1575,19 @@ function snapToTiles(room, heads, rule, mm, ang){
     const su=nearestTileStop(r.x, t.u, fu);
     const sv=nearestTileStop(r.y, t.v, fv);
     if(!su||!sv) continue;
-    /* The nearest tile point is the one to take, unless there is a fitting
-       in that tile. Then the points in the tiles around it are next, nearest
-       first, up to a tile and a half away. */
-    let opts=[{u:su.pos, v:sv.pos, du:su.d, dv:sv.d, mu:maxMove, mv:maxMove}];
-    if(blockedAt(room, rotFrom({x:su.pos, y:sv.pos}, ang))){
-      opts=[];
-      for(const pu of tileStops(r.x, t.u, fu)) for(const pv of tileStops(r.y, t.v, fv))
-        opts.push({u:pu, v:pv, du:Math.abs(pu-r.x), dv:Math.abs(pv-r.y), mu:1.5*t.u.P, mv:1.5*t.v.P});
-      opts.sort((a,b)=>Math.hypot(a.du,a.dv)-Math.hypot(b.du,b.dv));
-    }
+    /* The nearest tile point first. When that one breaks a rule — too close
+       to another head, uncovering a wall — the next nearest often does not,
+       so try them in turn rather than leaving the head off the grid. Where
+       the nearest tile has a fitting in it, look up to a tile and a half. */
+    const far = blockedAt(room, rotFrom({x:su.pos, y:sv.pos}, ang));
+    const opts=[{u:su.pos, v:sv.pos, du:su.d, dv:sv.d}];
+    for(const pu of tileStops(r.x, t.u, fu)) for(const pv of tileStops(r.y, t.v, fv))
+      opts.push({u:pu, v:pv, du:Math.abs(pu-r.x), dv:Math.abs(pv-r.y)});
+    opts.sort((a,b)=>Math.hypot(a.du,a.dv)-Math.hypot(b.du,b.dv));
+    const mu = far ? 1.5*t.u.P : maxMove, mv = far ? 1.5*t.v.P : maxMove;
     const others=heads.filter(o=>o!==h);
     for(const o of opts){
-      if(o.du>o.mu || o.dv>o.mv) continue;
+      if(o.du>mu || o.dv>mv) continue;
       const w=rotFrom({x:o.u, y:o.v}, ang);
       if(!pointInPoly(w, room.polygon) || distToPoly(w, room.polygon) < minWall) continue;
       if(blockedAt(room, w)) continue;
@@ -2628,10 +2699,16 @@ function draw(){
       const o=tileOccupancy(room); if(!o || !o.taken.size) continue;
       ctx.save();
       ctx.fillStyle="rgba(230,140,40,.22)"; ctx.strokeStyle="rgba(230,140,40,.7)"; ctx.lineWidth=1;
-      for(const key of o.taken){
-        const q=tileCellPoly(o.t, key).map(toScreen);
+      const shade = poly => { const q=poly.map(toScreen);
         ctx.beginPath(); q.forEach((s,i)=> i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y)); ctx.closePath();
-        ctx.fill(); ctx.stroke();
+        ctx.fill(); ctx.stroke(); };
+      const c = OBST.fitClearMm/mm;
+      for(const key of o.taken){
+        const b=o.boxes.get(key);
+        if(o.whole.has(key) || !b){ shade(tileCellPoly(o.t, key)); continue; }
+        // just the fitting and the ground around it a head keeps off
+        for(const r of b) shade([[r.u0-c,r.v0-c],[r.u1+c,r.v0-c],[r.u1+c,r.v1+c],[r.u0-c,r.v1+c]]
+          .map(([x,y])=>rotFrom({x,y}, o.t.ang)));
       }
       ctx.restore();
     }
@@ -3828,6 +3905,12 @@ function renderProps(){
       ${!on? `<p class="hint" style="margin:4px 0 0">GIB is continuous, so heads follow the room grid only and nothing is snapped to ceiling lines.</p>` : ""}
       ${on? `<div class="stat"><span>Grid found</span><b class="${t?"good":""}">${t? `${t.u.sizeMm} × ${t.v.sizeMm} mm${t.manual?" (set by hand)":""}` : (VEC.busy? "still reading the page…" : VEC.ready? "none detected" : "no vectors in this PDF")}</b></div>
       ${t&&!t.manual?`<div class="stat"><span>Confidence</span><b>${(Math.min(t.u.strength,t.v.strength)*100).toFixed(0)}% · ${t.u.lines}×${t.v.lines} lines</b></div>`:""}
+      ${(()=>{ if(!t || t.manual || !t.u.measuredMm) return "";
+        const off=Math.max(Math.abs(t.u.measuredMm/t.u.sizeMm-1), Math.abs(t.v.measuredMm/t.v.sizeMm-1));
+        const read=(t.u.borrowed||t.v.borrowed)? `<p class="hint" style="margin:4px 0 0">Too few grid lines cross this room one way, so that way was read from the grid around it.</p>` : "";
+        if(off<0.004) return read;
+        return `<div class="stat"><span>Tiles measure</span><b class="bad">${t.u.measuredMm.toFixed(0)} × ${t.v.measuredMm.toFixed(0)} mm</b></div>
+        <p class="hint" style="margin:4px 0 0">At the scale set, the tiles come out ${(off*100).toFixed(1)}% off ${t.u.sizeMm} × ${t.v.sizeMm}. Heads follow the tiles as drawn, but every length in this drawing is off by as much — check the scale against a known dimension.</p>${read}`; })()}
       ${(()=>{ if(t) return ""; const d=tileDiag(room); if(!d) return "";
         const one=(lbl,x)=>`<div class="stat"><span>${lbl}</span><b>${x.lines||0} lines${x.best?` · best ${x.best.sizeMm} mm at ${(x.best.strength*100).toFixed(0)}%, ${x.best.lines} apart`:""}</b></div>`;
         return one("Across, candidates", d.across)+one("Down, candidates", d.down)+

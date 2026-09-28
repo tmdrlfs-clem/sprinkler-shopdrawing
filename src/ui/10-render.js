@@ -268,10 +268,16 @@ function draw(){
       const o=tileOccupancy(room); if(!o || !o.taken.size) continue;
       ctx.save();
       ctx.fillStyle="rgba(230,140,40,.22)"; ctx.strokeStyle="rgba(230,140,40,.7)"; ctx.lineWidth=1;
-      for(const key of o.taken){
-        const q=tileCellPoly(o.t, key).map(toScreen);
+      const shade = poly => { const q=poly.map(toScreen);
         ctx.beginPath(); q.forEach((s,i)=> i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y)); ctx.closePath();
-        ctx.fill(); ctx.stroke();
+        ctx.fill(); ctx.stroke(); };
+      const c = OBST.fitClearMm/mm;
+      for(const key of o.taken){
+        const b=o.boxes.get(key);
+        if(o.whole.has(key) || !b){ shade(tileCellPoly(o.t, key)); continue; }
+        // just the fitting and the ground around it a head keeps off
+        for(const r of b) shade([[r.u0-c,r.v0-c],[r.u1+c,r.v0-c],[r.u1+c,r.v1+c],[r.u0-c,r.v1+c]]
+          .map(([x,y])=>rotFrom({x,y}, o.t.ang)));
       }
       ctx.restore();
     }

@@ -117,3 +117,68 @@ test("the ceiling picks its usual head, but never overrides the designer's", () 
   assert.equal(A.call("headForCeiling", { headType: "pend", ceiling: "tile" }, "gib"), "sp-conc",
     "a legacy id for the default still counts as the default");
 });
+
+test("a corridor too narrow to show the grid one way still lands every head on a tile", () => {
+  const A = loadCore();
+  A.setVectors(plateWithGrid({ clutter: 0 }));
+  const cases = [
+    { w: 20000, h: 3000, x: 2000, y: 2000, hazard: "OH1" },   // two or three 1200 lines across
+    { w: 2400, h: 14000, x: 9000, y: 1000, hazard: "OH1" },   // four 600 lines across
+    { w: 16000, h: 3600, x: 5200, y: 4300, hazard: "OH2" },
+    { w: 13000, h: 3000, x: 1300, y: 9000, hazard: "ELH" },
+  ];
+  for (const c of cases) {
+    const { room, heads } = A.layout({ id: "c" + c.x, hazard: c.hazard, polygon: rectRoom(c.w, c.h, mm, c.x, c.y), ceiling: "tile", gridMode: "ortho" });
+    const t = A.call("detectTiles", room);
+    assert.ok(t, `${c.w}x${c.h}: no grid found`);
+    assert.deepEqual([t.u.sizeMm, t.v.sizeMm], [600, 1200]);
+    assert.equal(heads.filter(h => h.tile).length, heads.length, `${c.w}x${c.h}: heads off the tile points`);
+    const res = A.analyse(room.id);
+    assert.ok(!res.flags.some(f => /uncovered|exceeds|over the|under/.test(f)), res.flags.join("; "));
+  }
+});
+
+test("a narrow room does not borrow a neighbour's grid that its own lines disagree with", () => {
+  const A = loadCore();
+  const segs = [];
+  const W = 40000, H = 26000;
+  for (let x = 150; x <= W; x += 600) segs.push(P(x), P(0), P(x), P(H));
+  // the plate is on one grid, the corridor strip y 8000..11000 on another, 600 out of step
+  for (let y = 300; y <= H; y += 1200) {
+    if (y > 8000 && y < 11000) continue;
+    segs.push(P(0), P(y), P(W), P(y));
+  }
+  for (let y = 8000 + 900; y < 11000; y += 1200) segs.push(P(0), P(y), P(W), P(y));
+  A.setVectors(segs);
+  const room = { id: "n1", hazard: "OH1", polygon: rectRoom(14000, 3000, mm, 3000, 8000), ceiling: "tile", gridMode: "ortho" };
+  const t = A.call("detectTiles", room);
+  if (t) {
+    const off = ((8900 / mm - t.v.origin) / t.v.P) % 1;
+    assert.ok(Math.min(off, 1 - off) < 0.06, "took the neighbour's rows instead of its own");
+  }
+});
+
+test("when the nearest tile point breaks a rule the next one is taken", () => {
+  const A = loadCore();
+  A.setVectors(plateWithGrid({ clutter: 0 }));
+  // two heads; the nearest tile point for the second sits under the minimum spacing
+  const { heads } = A.layout({ id: "s1", hazard: "OH2", polygon: rectRoom(4381, 3022, mm, 1008, 5179), ceiling: "tile", gridMode: "ortho" });
+  assert.equal(heads.filter(h => h.tile).length, heads.length);
+});
+
+test("a scale a little off still puts heads on the tiles as drawn", () => {
+  for (const err of [-0.015, 0.01]) {
+    const A = loadCore({ scale: mm * (1 + err) });           // the designer's two clicks were not exact
+    A.setVectors(plateWithGrid({ clutter: 0 }));
+    const { room, heads } = A.layout({ id: "d", hazard: "OH1", polygon: rectRoom(14000, 9000, mm, 2000, 2000), ceiling: "tile", gridMode: "ortho", tileOcc: false });
+    const t = A.call("detectTiles", room);
+    assert.ok(Math.abs(t.u.measuredMm - 600 * (1 + err)) < 3, `measured ${t.u.measuredMm}`);
+    for (const h of heads) {
+      // where the head is on the drawing, in the drawing's own millimetres
+      const x = h.x * mm, y = h.y * mm;
+      const du = Math.abs(x - (150 + (Math.round((x - 450) / 600) + 0.5) * 600));
+      const dv = Math.min(...[1 / 3, 1 / 2, 2 / 3].map(f => Math.abs(y - (300 + (Math.round((y - 300 - f * 1200) / 1200) + f) * 1200))));
+      assert.ok(Math.hypot(du, dv) < 5, `scale ${err * 100}% off: head ${Math.hypot(du, dv).toFixed(0)} mm off the drawn tile point`);
+    }
+  }
+});

@@ -93,8 +93,10 @@ Two things block a spot:
   fitting: architects' dashed outlines and light-spread fans are open, and
   come through as loose dashes, not as a dash style. An outline that is the
   tile itself is the grid. If over half a room's tiles read as taken, it is
-  a pattern and is set aside. The designer's clicks (`room.tileMarks`)
-  override what was read.
+  a pattern and is set aside. Only the fitting itself, plus
+  `OBST.fitClearMm`, is out of bounds, so a grille at one end of a 1200
+  tile leaves the far third free. The designer's clicks (`room.tileMarks`)
+  override what was read, and a tile marked by hand is taken whole.
 - **A marked obstruction** (`page().obstacles`), kept clear by
   `obstacleClearMm()`.
 
@@ -151,6 +153,15 @@ compliance.
   early around the first blob.
 - **A room is one room.** One fill, one Apply, one room. Unconnected
   patches are reported, never quietly turned into extra rooms.
+- **The tile pitch is measured, not assumed.** Taking 600 mm through a
+  scale that is 1% out put heads 70 mm off the drawn tiles across a 14 m
+  room while the panel said every head was on a tile point. `bestPeriod`
+  searches a few percent either side of each size; the size it finds is
+  also shown, since it is a check on the scale.
+- **A corridor holds too few grid lines to read one way.** Under 1200
+  tiles a 3.6 m corridor crosses two or three; detection needs four, and
+  the room silently got no grid. That axis is read from the grid around
+  the room, if the room's own lines sit on it.
 - **Some PDFs carry the architecture as a picture.** An as-built can have
   only the sprinkler layer as vectors, with the ceiling underneath embedded
   as an image. No grid and no fittings can be read from that; the tile

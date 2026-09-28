@@ -170,6 +170,12 @@ function renderProps(){
       ${!on? `<p class="hint" style="margin:4px 0 0">GIB is continuous, so heads follow the room grid only and nothing is snapped to ceiling lines.</p>` : ""}
       ${on? `<div class="stat"><span>Grid found</span><b class="${t?"good":""}">${t? `${t.u.sizeMm} × ${t.v.sizeMm} mm${t.manual?" (set by hand)":""}` : (VEC.busy? "still reading the page…" : VEC.ready? "none detected" : "no vectors in this PDF")}</b></div>
       ${t&&!t.manual?`<div class="stat"><span>Confidence</span><b>${(Math.min(t.u.strength,t.v.strength)*100).toFixed(0)}% · ${t.u.lines}×${t.v.lines} lines</b></div>`:""}
+      ${(()=>{ if(!t || t.manual || !t.u.measuredMm) return "";
+        const off=Math.max(Math.abs(t.u.measuredMm/t.u.sizeMm-1), Math.abs(t.v.measuredMm/t.v.sizeMm-1));
+        const read=(t.u.borrowed||t.v.borrowed)? `<p class="hint" style="margin:4px 0 0">Too few grid lines cross this room one way, so that way was read from the grid around it.</p>` : "";
+        if(off<0.004) return read;
+        return `<div class="stat"><span>Tiles measure</span><b class="bad">${t.u.measuredMm.toFixed(0)} × ${t.v.measuredMm.toFixed(0)} mm</b></div>
+        <p class="hint" style="margin:4px 0 0">At the scale set, the tiles come out ${(off*100).toFixed(1)}% off ${t.u.sizeMm} × ${t.v.sizeMm}. Heads follow the tiles as drawn, but every length in this drawing is off by as much — check the scale against a known dimension.</p>${read}`; })()}
       ${(()=>{ if(t) return ""; const d=tileDiag(room); if(!d) return "";
         const one=(lbl,x)=>`<div class="stat"><span>${lbl}</span><b>${x.lines||0} lines${x.best?` · best ${x.best.sizeMm} mm at ${(x.best.strength*100).toFixed(0)}%, ${x.best.lines} apart`:""}</b></div>`;
         return one("Across, candidates", d.across)+one("Down, candidates", d.down)+

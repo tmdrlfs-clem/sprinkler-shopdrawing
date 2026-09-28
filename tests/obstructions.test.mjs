@@ -153,3 +153,17 @@ test("a head moved onto an obstruction is flagged", () => {
   assert.equal(res.blockedHeads.length, 1);
   assert.ok(res.flags.some(f => /marked obstruction/.test(f)));
 });
+
+test("a small fitting at one end of a long tile leaves the far end free", () => {
+  const A = loadCore();
+  // a 600 grille in the first half of a 1200 tile
+  const d = drawing().grid().rect(OU + 8 * PU + 50, OV + 3 * PV + 50, OU + 9 * PU - 50, OV + 3 * PV + 550);
+  A.setVectors(d.segs, d.shapes);
+  const r = { ...room, id: "r9" };
+  const at = (fu, fv) => A.call("blockedAt", r, { x: P(OU + (8 + fu) * PU), y: P(OV + (3 + fv) * PV) });
+  assert.equal(at(0.5, 1 / 3), true, "the third over the grille");
+  assert.equal(at(0.5, 2 / 3), false, "the far third is free");
+  // a tile the designer marks is taken end to end
+  const marked = { ...r, id: "r10", tileMarks: { "8,3": true } };
+  assert.equal(A.call("blockedAt", marked, { x: P(OU + 8.5 * PU), y: P(OV + 3.9 * PV) }), true);
+});
