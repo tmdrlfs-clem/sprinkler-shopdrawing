@@ -228,7 +228,7 @@ function repairCoverage(room, placed, rule, mm, ang, cands){
     if(!coveredAt(idx0, pts[i].x, pts[i].y, ang, rad[i], model)) uncSet.add(i);
   if(!uncSet.size) return [];
 
-  const valid = p => pointInPoly(p, room.polygon) && distToPoly(p, room.polygon) >= minWall;
+  const valid = p => pointInPoly(p, room.polygon) && distToPoly(p, room.polygon) >= minWall && !blockedAt(room, p);
   // an uncovered point is also somewhere a head could go, so offer them
   let step=0;
   for(const i of uncSet){
@@ -495,6 +495,123 @@ function onTilePoint(h, t, fracs, mm){
   return near(r.x, t.u, axisFracs(t.u,t.v,fracs)) && near(r.y, t.v, axisFracs(t.v,t.u,fracs));
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Where a head cannot go.
+   On the as-built drawings heads never sit on a light fitting, a grille or
+   anything else in the ceiling. Two things mark such a spot: in a tile
+   ceiling, a tile with something drawn inside it; and anywhere, an area the
+   designer has marked, kept clear by a set distance. This keeps heads off
+   fittings. It does not model a fitting shadowing the spray.
+   ────────────────────────────────────────────────────────────── */
+const OBST = {clearMm:300, minSpanMm:100, edgeTolMm:25, maxShare:0.5};
+const OCC_CACHE = new Map();
+
+function obstacleClearMm(){ return state.doc.obstacleClearMm ?? OBST.clearMm; }
+
+function tileCell(p, t){
+  const r=rotTo(p, t.ang);
+  const fu=(r.x-t.u.origin)/t.u.P, fv=(r.y-t.v.origin)/t.v.P;
+  const i=Math.floor(fu), j=Math.floor(fv);
+  return {i, j, fu:fu-i, fv:fv-j, key:i+","+j};
+}
+function tileCellPoly(t, key){
+  const [i,j]=key.split(",").map(Number);
+  const u0=t.u.origin+i*t.u.P, v0=t.v.origin+j*t.v.P;
+  return [[u0,v0],[u0+t.u.P,v0],[u0+t.u.P,v0+t.v.P],[u0,v0+t.v.P]].map(([x,y])=>rotFrom({x,y}, t.ang));
+}
+
+/* Tiles with a fitting in them. A fitting is drawn as a closed outline (a
+   panel, a grille, a downlight) sitting within a tile or two. Open linework
+   is never a fitting: a dashed outline of something overhead, a light
+   spread, a building grid line all cross tiles without closing. An outline
+   that is the tile itself is the grid, and anything bigger than two tiles
+   is a room, a bulkhead or furniture. Where most of the room comes out
+   taken, the tiles are patterned, and the result is set aside rather than
+   trusted. The designer's own marks on a tile always win. */
+function tileOccupancy(room){
+  if(!isTiled(room) || room.tileOcc===false) return null;
+  const mm=mmPerPx(); if(!mm) return null;
+  const t=detectTiles(room); if(!t) return null;
+  const xs=room.polygon.map(q=>q.x), ys=room.polygon.map(q=>q.y);
+  const bx0=Math.min(...xs), bx1=Math.max(...xs), by0=Math.min(...ys), by1=Math.max(...ys);
+  const marks=room.tileMarks||{};
+  const sig=[t.ang,t.u.origin,t.u.P,t.v.origin,t.v.P,VEC.count,VEC.shapes.length,bx0,bx1,by0,by1,xs.length,JSON.stringify(marks)].join("|");
+  const hit=OCC_CACHE.get(room.id);
+  if(hit && hit.sig===sig) return hit.res;
+
+  const tol=OBST.edgeTolMm/mm, minSpan=OBST.minSpanMm/mm;
+  const found=new Set();
+  const S=VEC.segs, SH=VEC.shapes, n=VEC.ready ? VEC.count : 0;
+  for(let k=0; n && k<SH.length; k+=2){
+    const a=SH[k], b=Math.min(SH[k+1], n);
+    if(b-a<2) continue;
+    if(S[a*4]<bx0 || S[a*4]>bx1 || S[a*4+1]<by0 || S[a*4+1]>by1) continue;
+    let u0=Infinity, u1=-Infinity, v0=Infinity, v1=-Infinity;
+    for(let s=a; s<b; s++) for(const e of [0,2]){
+      const r=rotTo({x:S[s*4+e], y:S[s*4+e+1]}, t.ang);
+      if(r.x<u0) u0=r.x; if(r.x>u1) u1=r.x; if(r.y<v0) v0=r.y; if(r.y>v1) v1=r.y;
+    }
+    if(u1-u0<minSpan || v1-v0<minSpan) continue;
+    const i0=Math.floor((u0+tol-t.u.origin)/t.u.P), i1=Math.floor((u1-tol-t.u.origin)/t.u.P);
+    const j0=Math.floor((v0+tol-t.v.origin)/t.v.P), j1=Math.floor((v1-tol-t.v.origin)/t.v.P);
+    if(i1<i0 || j1<j0 || i1-i0>1 || j1-j0>1) continue;
+    if(i0===i1 && j0===j1){
+      const U0=t.u.origin+i0*t.u.P, V0=t.v.origin+j0*t.v.P;
+      if(Math.abs(u0-U0)<tol && Math.abs(u1-U0-t.u.P)<tol && Math.abs(v0-V0)<tol && Math.abs(v1-V0-t.v.P)<tol) continue;
+    }
+    for(let i=i0;i<=i1;i++) for(let j=j0;j<=j1;j++) found.add(i+","+j);
+  }
+  const tilesInRoom = polyArea(room.polygon)/(t.u.P*t.v.P);
+  const patterned = found.size > Math.max(4, tilesInRoom*OBST.maxShare);
+  const taken = patterned ? new Set() : new Set(found);
+  for(const [key,v] of Object.entries(marks)){ if(v) taken.add(key); else taken.delete(key); }
+  const res = {t, taken, found: found.size, patterned};
+  OCC_CACHE.set(room.id, {sig, res});
+  return res;
+}
+
+function blockedAt(room, p){
+  const obs=page().obstacles;
+  if(obs && obs.length){
+    const mm=mmPerPx();
+    const clear = mm ? obstacleClearMm()/mm : 0;
+    for(const o of obs) if(pointInPoly(p, o.polygon) || distToPoly(p, o.polygon) < clear) return true;
+  }
+  const occ=tileOccupancy(room);
+  return !!(occ && occ.taken.size && occ.taken.has(tileCell(p, occ.t).key));
+}
+
+function obstRect(a, b){
+  const x0=Math.min(a.x,b.x), x1=Math.max(a.x,b.x), y0=Math.min(a.y,b.y), y1=Math.max(a.y,b.y);
+  return [{x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1}];
+}
+
+/* Rooms an obstruction can push heads around in: any within its clearance. */
+function roomsNear(poly){
+  const mm=mmPerPx(), c = mm ? obstacleClearMm()/mm : 0;
+  const box = q => { const xs=q.map(p=>p.x), ys=q.map(p=>p.y);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+  const [a0,b0,a1,b1]=box(poly);
+  return page().rooms.filter(r=>{ const [x0,y0,x1,y1]=box(r.polygon);
+    return x0<=a1+c && x1>=a0-c && y0<=b1+c && y1>=b0-c; });
+}
+
+/* The designer's call on one tile: taken if it reads free, free if taken. */
+function toggleTileMark(room, p){
+  const o=tileOccupancy(room); if(!o) return null;
+  const key=tileCell(p, o.t).key;
+  const marks = room.tileMarks || (room.tileMarks={});
+  marks[key] = !o.taken.has(key);
+  return {key, taken:marks[key]};
+}
+
+/* Every tile point on one axis within a tile of this position. */
+function tileStops(val, grid, fracs){
+  const k=Math.floor((val-grid.origin)/grid.P), out=[];
+  for(let kk=k-1; kk<=k+1; kk++) for(const f of fracs) out.push(grid.origin+(kk+f)*grid.P);
+  return out;
+}
+
 function snapToTiles(room, heads, rule, mm, ang){
   if(!isTiled(room)) return {aligned:0, total:heads.length, grid:null};
   const t=detectTiles(room);
@@ -527,21 +644,35 @@ function snapToTiles(room, heads, rule, mm, ang){
 
   let aligned=0;
   const maxMove = Math.min(t.u.P, t.v.P);          // never shove a head more than one tile
+  const fu=axisFracs(t.u, t.v, fracs), fv=axisFracs(t.v, t.u, fracs);
   for(const h of heads){
     if(h.locked && !h.auto) continue;
     const r=rotTo(h, ang);
-    const su=nearestTileStop(r.x, t.u, axisFracs(t.u, t.v, fracs));
-    const sv=nearestTileStop(r.y, t.v, axisFracs(t.v, t.u, fracs));
+    const su=nearestTileStop(r.x, t.u, fu);
+    const sv=nearestTileStop(r.y, t.v, fv);
     if(!su||!sv) continue;
-    if(su.d>maxMove || sv.d>maxMove) continue;
-    const w=rotFrom({x:su.pos, y:sv.pos}, ang);
-    if(!pointInPoly(w, room.polygon) || distToPoly(w, room.polygon) < minWall) continue;
+    /* The nearest tile point is the one to take, unless there is a fitting
+       in that tile. Then the points in the tiles around it are next, nearest
+       first, up to a tile and a half away. */
+    let opts=[{u:su.pos, v:sv.pos, du:su.d, dv:sv.d, mu:maxMove, mv:maxMove}];
+    if(blockedAt(room, rotFrom({x:su.pos, y:sv.pos}, ang))){
+      opts=[];
+      for(const pu of tileStops(r.x, t.u, fu)) for(const pv of tileStops(r.y, t.v, fv))
+        opts.push({u:pu, v:pv, du:Math.abs(pu-r.x), dv:Math.abs(pv-r.y), mu:1.5*t.u.P, mv:1.5*t.v.P});
+      opts.sort((a,b)=>Math.hypot(a.du,a.dv)-Math.hypot(b.du,b.dv));
+    }
     const others=heads.filter(o=>o!==h);
-    if(others.some(o=>Math.hypot(o.x-w.x,o.y-w.y) < minSp)) continue;
-    const trial=[...others, {x:w.x, y:w.y}];
-    if(!covered(trial)) continue;                  // alignment never costs coverage
-    h.x=w.x; h.y=w.y;
-    aligned++;
+    for(const o of opts){
+      if(o.du>o.mu || o.dv>o.mv) continue;
+      const w=rotFrom({x:o.u, y:o.v}, ang);
+      if(!pointInPoly(w, room.polygon) || distToPoly(w, room.polygon) < minWall) continue;
+      if(blockedAt(room, w)) continue;
+      if(others.some(x=>Math.hypot(x.x-w.x,x.y-w.y) < minSp)) continue;
+      if(!covered([...others, {x:w.x, y:w.y}])) continue;   // alignment never costs coverage
+      h.x=w.x; h.y=w.y;
+      aligned++;
+      break;
+    }
   }
   return {aligned, total:heads.length, grid:t};
 }
@@ -614,7 +745,7 @@ function pullHeads(room, heads, rule, mm, ang){
 
     let done=false;
     for(const o of options){
-      if(!pointInPoly(o.w, room.polygon) || distToPoly(o.w, room.polygon) < minWall) continue;
+      if(!pointInPoly(o.w, room.polygon) || distToPoly(o.w, room.polygon) < minWall || blockedAt(room, o.w)) continue;
       if(heads.some(x=>x!==o.h && Math.hypot(x.x-o.w.x, x.y-o.w.y) < minSp)) continue;
       const old={x:o.h.x, y:o.h.y};
       o.h.x=o.w.x; o.h.y=o.w.y;
@@ -700,7 +831,7 @@ function autoHeads(room, keep){
   const areaM2 = polyArea(room.polygon)*mm*mm/1e6;
   const minWall = (rule.minWallDist??0.1)*1000/mm;
   const minSp = rule.minSpacing*1000/mm;
-  const valid = p => pointInPoly(p, room.polygon) && distToPoly(p, room.polygon) >= minWall;
+  const valid = p => pointInPoly(p, room.polygon) && distToPoly(p, room.polygon) >= minWall && !blockedAt(room, p);
 
   // a grid point outside the room is walked back in along the grid axes
   const nudge = P => {

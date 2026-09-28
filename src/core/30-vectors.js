@@ -6,7 +6,7 @@
    uniform grid so the cursor can find nearby geometry quickly.
    ══════════════════════════════════════════════════════════════ */
 
-const VEC = {segs:null, grid:new Map(), longs:[], cell:32, count:0, ready:false, truncated:false, busy:false};
+const VEC = {segs:null, shapes:new Int32Array(0), grid:new Map(), longs:[], cell:32, count:0, ready:false, truncated:false, busy:false};
 
 const Tx = (m1,m2)=>[
   m1[0]*m2[0]+m1[2]*m2[1], m1[1]*m2[0]+m1[3]*m2[1],
@@ -28,7 +28,16 @@ async function extractVectors(pg, viewport){
     let ctm = base.slice();
     const stack = [];
     const out = [];
-    let x=0,y=0,sx=0,sy=0;
+    /* Closed outlines, as runs of segments [from, to). A fitting in a
+       ceiling is drawn as one (a panel, a grille, a downlight); a dashed
+       line, a light-spread fan or a grid line is not. */
+    const shapes = [];
+    let x=0,y=0,sx=0,sy=0, sub=-1;
+    const endSub = closed => {
+      const n=out.length/4;
+      if(sub>=0 && n-sub>=2 && (closed || (Math.abs(x-sx)<1e-6 && Math.abs(y-sy)<1e-6))) shapes.push(sub, n);
+      sub=-1;
+    };
 
     const push=(ax,ay,bx,by)=>{
       if(out.length >= MAX_SEGS*4){ VEC.truncated=true; return; }
@@ -56,7 +65,7 @@ async function extractVectors(pg, viewport){
       else if(fn===OPS.constructPath){
         const ops=a[0], co=a[1]; let j=0;
         for(const op of ops){
-          if(op===OPS.moveTo){ x=co[j++]; y=co[j++]; sx=x; sy=y; }
+          if(op===OPS.moveTo){ endSub(false); x=co[j++]; y=co[j++]; sx=x; sy=y; sub=out.length/4; }
           else if(op===OPS.lineTo){ const nx=co[j++], ny=co[j++]; push(x,y,nx,ny); x=nx; y=ny; }
           else if(op===OPS.curveTo){ const a1=co[j++],b1=co[j++],a2=co[j++],b2=co[j++],ex=co[j++],ey=co[j++];
             curve(x,y,a1,b1,a2,b2,ex,ey); x=ex; y=ey; }
@@ -64,15 +73,17 @@ async function extractVectors(pg, viewport){
             curve(x,y,x,y,a2,b2,ex,ey); x=ex; y=ey; }
           else if(op===OPS.curveTo3){ const a1=co[j++],b1=co[j++],ex=co[j++],ey=co[j++];
             curve(x,y,a1,b1,ex,ey,ex,ey); x=ex; y=ey; }
-          else if(op===OPS.closePath){ push(x,y,sx,sy); x=sx; y=sy; }
+          else if(op===OPS.closePath){ push(x,y,sx,sy); x=sx; y=sy; endSub(true); }
           else if(op===OPS.rectangle){ const rx=co[j++],ry=co[j++],rw=co[j++],rh=co[j++];
+            endSub(false); sub=out.length/4;
             push(rx,ry,rx+rw,ry); push(rx+rw,ry,rx+rw,ry+rh);
             push(rx+rw,ry+rh,rx,ry+rh); push(rx,ry+rh,rx,ry);
-            x=rx; y=ry; sx=rx; sy=ry; }
+            x=rx; y=ry; sx=rx; sy=ry; endSub(true); }
         }
+        endSub(false);
       }
     }
-    buildVecIndex(out);
+    buildVecIndex(out, shapes);
   }catch(err){
     VEC.ready=false;
     console.warn("vector extraction failed", err);
@@ -92,8 +103,9 @@ async function extractVectors(pg, viewport){
   draw();
 }
 
-function buildVecIndex(flat){
+function buildVecIndex(flat, shapes){
   VEC.segs = new Float64Array(flat);
+  VEC.shapes = new Int32Array(shapes || []);
   const n = flat.length/4;
   const span = Math.max(state.pdfCanvas? state.pdfCanvas.width:2000, state.pdfCanvas? state.pdfCanvas.height:2000);
   const cell = Math.max(12, Math.round(span/240));

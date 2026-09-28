@@ -62,6 +62,11 @@ function analyse(room){
   res.tightHeads = tight.map(h=>h.id);
   if(tight.length) res.flags.push(`${tight.length} head${tight.length>1?"s":""} closer than ${(r.minWallDist??0.1)} m to a wall`);
 
+  // heads on a fitting: in a taken tile, or too near a marked obstruction
+  const onFit = heads.filter(h => blockedAt(room, h));
+  res.blockedHeads = onFit.map(h=>h.id);
+  if(onFit.length) res.flags.push(`${onFit.length} head${onFit.length>1?"s":""} in a tile with a fitting drawn in it, or within ${obstacleClearMm()} mm of a marked obstruction`);
+
   // wall distance: every boundary point must be within a head's reach
   const stepPx = 300/mm;
   let worstWall=0;

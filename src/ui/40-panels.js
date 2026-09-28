@@ -185,6 +185,11 @@ function renderProps(){
         ${room.tileManual?`<button class="btn" id="pTileAuto">Back to auto</button>`:""}
       </div>
       <div class="stat"><span>Heads on a tile point</span><b class="${al===hs.length&&hs.length?"good":""}">${al} of ${hs.length}</b></div>
+      ${t? (()=>{ const o=tileOccupancy(room); const nm=Object.keys(room.tileMarks||{}).length;
+        return `<div class="field" style="margin:7px 0 0"><label style="width:auto;flex:1">Keep heads out of tiles with a fitting</label><input type="checkbox" id="pTileOcc" ${room.tileOcc!==false?"checked":""} style="flex:none;width:auto"></div>
+        ${o? `<div class="stat"><span>Tiles with a fitting</span><b>${o.taken.size}${nm?` · ${nm} set by hand`:""}</b></div>` : ""}
+        ${o&&o.patterned? `<p class="hint" style="margin:4px 0 0">Something is drawn in nearly every tile here, so it reads as a pattern and is set aside. Mark the taken tiles by hand.</p>` : ""}
+        ${o? `<p class="hint" style="margin:4px 0 0">A tile counts as taken when a closed outline — a panel, grille or downlight — is drawn inside it. With the Obstruct tool (B), click a tile to mark it taken or free.${nm?` <a href="#" id="pTileMarksReset">Forget the hand marks</a>.`:""}</p>` : ""}`; })() : ""}
       <div class="field" style="margin-top:7px"><label style="width:auto;flex:1">Along the long side of the tile</label></div>
       <div class="rowbtns" style="margin-top:2px">
         ${[["1/3",1/3],["1/2",1/2],["2/3",2/3],["edge",0]].map(([lbl,f])=>
@@ -218,6 +223,17 @@ function renderProps(){
     </div>
   </div>
 
+  <h3 class="sec">Obstructions</h3>
+  <div class="block">
+    <div class="stat"><span>Marked on this page</span><b>${p.obstacles.length}</b></div>
+    <div class="field"><label>Keep heads clear by</label><input type="number" id="pObsClr" step="50" min="0" value="${obstacleClearMm()}"><span class="unit">mm</span></div>
+    <div class="rowbtns">
+      <button class="btn ${state.mode==="obst"?"primary":""}" id="pObsTool">Mark obstructions</button>
+      ${p.obstacles.length?`<button class="btn" id="pObsClear">Clear all</button>`:""}
+    </div>
+    <p class="hint">Drag a box over a light fitting, grille or anything else a head must not sit on; heads keep this distance from its edge. Alt+click a box to remove it.</p>
+  </div>
+
   ${(()=>{ const h=page().heads.find(x=>x.id===state.selHead && x.roomId===room.id); if(!h) return "";
     const opts=Object.entries(devices()).map(([id,d])=>`<option value="${id}" ${devId(h.type)===id?"selected":""}>${esc(d.group)} — ${esc(d.label)}</option>`).join("");
     return `<h3 class="sec">Selected device</h3>
@@ -233,7 +249,7 @@ function renderProps(){
   </ul>
 
   <div class="rowbtns"><button class="btn" id="pDel">Delete room</button></div>
-  <p class="hint">These checks only test the figures entered in this tool. Obstructions, beams, light fittings and ceiling exceptions are not considered — the designer signs it off.</p>`;
+  <p class="hint">These checks only test the figures entered in this tool. Heads are kept off marked obstructions and tiles with a fitting, but a fitting or beam shadowing the spray, and ceiling exceptions, are not considered — the designer signs it off.</p>`;
 
   const bind=(id,ev,fn)=>{const n=document.getElementById(id); if(n) n.addEventListener(ev,fn);};
   bind("pName","input",e=>{room.name=e.target.value; save(); renderRooms(); draw();});
@@ -256,6 +272,19 @@ function renderProps(){
   bind("pTilePU","change",e=>{ if(room.tileManual){ room.tileManual.pu=parseFloat(e.target.value)||600; regenerateHeads(room); syncPanels(); draw(); } });
   bind("pTilePV","change",e=>{ if(room.tileManual){ room.tileManual.pv=parseFloat(e.target.value)||1200; regenerateHeads(room); syncPanels(); draw(); } });
   bind("pTileX","change",e=>{ room.tileExtra=e.target.checked; regenerateHeads(room); syncPanels(); draw(); });
+  bind("pTileOcc","change",e=>{ snapshot(); room.tileOcc=e.target.checked; regenerateHeads(room); syncPanels(); draw(); });
+  bind("pTileMarksReset","click",e=>{ e.preventDefault(); snapshot(); room.tileMarks={}; regenerateHeads(room); syncPanels(); draw(); });
+  bind("pObsTool","click",()=>{ setMode("obst"); syncPanels(); });
+  bind("pObsClr","change",e=>{
+    const v=parseFloat(e.target.value);
+    state.doc.obstacleClearMm = Number.isFinite(v)&&v>=0 ? v : OBST.clearMm;
+    page().rooms.forEach(r=>regenerateHeads(r)); save(); syncPanels(); draw();
+  });
+  bind("pObsClear","click",()=>{
+    snapshot(); page().obstacles=[];
+    page().rooms.forEach(r=>regenerateHeads(r)); save(); syncPanels(); draw();
+    toast("Obstructions cleared.");
+  });
   document.querySelectorAll("#paneProps [data-ceil]").forEach(b=>b.onclick=()=>{
     if(ceilingOf(room)===b.dataset.ceil) return;
     snapshot();

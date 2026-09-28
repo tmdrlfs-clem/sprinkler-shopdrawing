@@ -10,7 +10,7 @@ function setMode(m){
   document.querySelectorAll(".tool").forEach(b=>b.classList.toggle("on", b.dataset.mode===m));
   if(m!=="measure"){ state.mdraft=null; }
   if(m!=="fill" && FILL.on) fillCancel(false);
-  view.classList.toggle("drawing", m==="room"||m==="calibrate"||m==="origin"||m==="head"||m==="measure"||m==="fill"||m==="tile");
+  view.classList.toggle("drawing", m==="room"||m==="calibrate"||m==="origin"||m==="head"||m==="measure"||m==="fill"||m==="tile"||m==="obst");
   updateLenCell();
   const hints={
     pan:"Click a head to see its coverage and wall offsets, drag it to move. C shows every head's coverage at once",
@@ -21,7 +21,8 @@ function setMode(m){
     vertex:"Drag the corners of the selected room",
     head:"Click inside a room to add a head, drag to move it, Alt+click to delete",
     origin:"Click the point your CAD coordinates are measured from",
-    tile:"Click a corner of the ceiling grid in the selected room to set it by hand"
+    tile:"Click a corner of the ceiling grid in the selected room to set it by hand",
+    obst:"Drag a box over a fitting heads must keep clear of, Alt+click a box to remove it. Click a tile to mark it taken or free"
   };
   document.getElementById("stHint").textContent=hints[m];
   draw();
@@ -65,6 +66,38 @@ function setCeiling(room, kind){
     setMode("tile");
     toast("Tile ceiling, but no grid is drawn in this room. Click one tile corner and the heads will line up to it.");
   }
+}
+
+/* Obstruct tool. A drag marks a box heads keep clear of; a click on a tile
+   in a tile-ceiling room flips that tile between taken and free. */
+function finishObstacle(d){
+  const end=toScreen(d.b);
+  if(Math.hypot(end.x-d.sp.x, end.y-d.sp.y) < 5){
+    const room=roomAt(d.a);
+    if(!room || !tileOccupancy(room)){
+      toast("Drag a box over the fitting. A click only marks a tile, in a tile-ceiling room with its grid found.");
+      return;
+    }
+    snapshot();
+    const r=toggleTileMark(room, d.a);
+    regenerateHeads(room); syncPanels(); draw();
+    toast(r.taken ? "Tile marked as taken." : "Tile marked as free.");
+    return;
+  }
+  snapshot();
+  const o={id:uid("o_"), polygon:obstRect(d.a, d.b)};
+  page().obstacles.push(o);
+  relayNear(o.polygon);
+}
+function removeObstacle(o){
+  const p=page();
+  p.obstacles=p.obstacles.filter(x=>x!==o);
+  relayNear(o.polygon);
+  toast("Obstruction removed.");
+}
+function relayNear(poly){
+  roomsNear(poly).forEach(r=>regenerateHeads(r));
+  save(); syncPanels(); draw();
 }
 
 /* After a room outline is made, ask what the ceiling is before laying

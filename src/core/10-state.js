@@ -120,11 +120,12 @@ function undoDoc(){
 
 function page(){
   const k = String(state.pageNum);
-  if(!state.doc.pages[k]) state.doc.pages[k] = {scale:null, scaleSource:null, origin:null, rooms:[], heads:[], measures:[]};
+  if(!state.doc.pages[k]) state.doc.pages[k] = {scale:null, scaleSource:null, origin:null, rooms:[], heads:[], measures:[], obstacles:[]};
   const pg = state.doc.pages[k];
   if(!pg.measures) pg.measures = [];          // older saved files
   if(!pg.rooms) pg.rooms = [];
   if(!pg.heads) pg.heads = [];
+  if(!pg.obstacles) pg.obstacles = [];
   return pg;
 }
 const mmPerPx = () => page().scale;          // null when no scale is set

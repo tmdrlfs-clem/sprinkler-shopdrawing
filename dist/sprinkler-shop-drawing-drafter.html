@@ -258,6 +258,8 @@ dialog p{color:var(--dim);margin:0 0 14px}
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>Heads</button>
       <button class="tool" data-mode="tile" title="Pick a ceiling tile corner (T)">
         <svg viewBox="0 0 24 24"><path d="M3 3h18v18H3z"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>Tile</button>
+      <button class="tool" data-mode="obst" title="Mark an obstruction or a taken tile (B)">
+        <svg viewBox="0 0 24 24"><path d="M5 5h14v14H5z" stroke-dasharray="3 2"/><path d="M5 5l14 14M19 5L5 19"/></svg>Obstruct</button>
       <button class="tool" data-mode="origin" title="Set coordinate origin (O)">
         <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3"/></svg>Origin</button>
     </nav>
@@ -480,11 +482,12 @@ function undoDoc(){
 
 function page(){
   const k = String(state.pageNum);
-  if(!state.doc.pages[k]) state.doc.pages[k] = {scale:null, scaleSource:null, origin:null, rooms:[], heads:[], measures:[]};
+  if(!state.doc.pages[k]) state.doc.pages[k] = {scale:null, scaleSource:null, origin:null, rooms:[], heads:[], measures:[], obstacles:[]};
   const pg = state.doc.pages[k];
   if(!pg.measures) pg.measures = [];          // older saved files
   if(!pg.rooms) pg.rooms = [];
   if(!pg.heads) pg.heads = [];
+  if(!pg.obstacles) pg.obstacles = [];
   return pg;
 }
 const mmPerPx = () => page().scale;          // null when no scale is set
@@ -601,7 +604,7 @@ function applyRatio(ratio, allPages){
    uniform grid so the cursor can find nearby geometry quickly.
    ══════════════════════════════════════════════════════════════ */
 
-const VEC = {segs:null, grid:new Map(), longs:[], cell:32, count:0, ready:false, truncated:false, busy:false};
+const VEC = {segs:null, shapes:new Int32Array(0), grid:new Map(), longs:[], cell:32, count:0, ready:false, truncated:false, busy:false};
 
 const Tx = (m1,m2)=>[
   m1[0]*m2[0]+m1[2]*m2[1], m1[1]*m2[0]+m1[3]*m2[1],
@@ -623,7 +626,16 @@ async function extractVectors(pg, viewport){
     let ctm = base.slice();
     const stack = [];
     const out = [];
-    let x=0,y=0,sx=0,sy=0;
+    /* Closed outlines, as runs of segments [from, to). A fitting in a
+       ceiling is drawn as one (a panel, a grille, a downlight); a dashed
+       line, a light-spread fan or a grid line is not. */
+    const shapes = [];
+    let x=0,y=0,sx=0,sy=0, sub=-1;
+    const endSub = closed => {
+      const n=out.length/4;
+      if(sub>=0 && n-sub>=2 && (closed || (Math.abs(x-sx)<1e-6 && Math.abs(y-sy)<1e-6))) shapes.push(sub, n);
+      sub=-1;
+    };
 
     const push=(ax,ay,bx,by)=>{
       if(out.length >= MAX_SEGS*4){ VEC.truncated=true; return; }
@@ -651,7 +663,7 @@ async function extractVectors(pg, viewport){
       else if(fn===OPS.constructPath){
         const ops=a[0], co=a[1]; let j=0;
         for(const op of ops){
-          if(op===OPS.moveTo){ x=co[j++]; y=co[j++]; sx=x; sy=y; }
+          if(op===OPS.moveTo){ endSub(false); x=co[j++]; y=co[j++]; sx=x; sy=y; sub=out.length/4; }
           else if(op===OPS.lineTo){ const nx=co[j++], ny=co[j++]; push(x,y,nx,ny); x=nx; y=ny; }
           else if(op===OPS.curveTo){ const a1=co[j++],b1=co[j++],a2=co[j++],b2=co[j++],ex=co[j++],ey=co[j++];
             curve(x,y,a1,b1,a2,b2,ex,ey); x=ex; y=ey; }
@@ -659,15 +671,17 @@ async function extractVectors(pg, viewport){
             curve(x,y,x,y,a2,b2,ex,ey); x=ex; y=ey; }
           else if(op===OPS.curveTo3){ const a1=co[j++],b1=co[j++],ex=co[j++],ey=co[j++];
             curve(x,y,a1,b1,ex,ey,ex,ey); x=ex; y=ey; }
-          else if(op===OPS.closePath){ push(x,y,sx,sy); x=sx; y=sy; }
+          else if(op===OPS.closePath){ push(x,y,sx,sy); x=sx; y=sy; endSub(true); }
           else if(op===OPS.rectangle){ const rx=co[j++],ry=co[j++],rw=co[j++],rh=co[j++];
+            endSub(false); sub=out.length/4;
             push(rx,ry,rx+rw,ry); push(rx+rw,ry,rx+rw,ry+rh);
             push(rx+rw,ry+rh,rx,ry+rh); push(rx,ry+rh,rx,ry);
-            x=rx; y=ry; sx=rx; sy=ry; }
+            x=rx; y=ry; sx=rx; sy=ry; endSub(true); }
         }
+        endSub(false);
       }
     }
-    buildVecIndex(out);
+    buildVecIndex(out, shapes);
   }catch(err){
     VEC.ready=false;
     console.warn("vector extraction failed", err);
@@ -687,8 +701,9 @@ async function extractVectors(pg, viewport){
   draw();
 }
 
-function buildVecIndex(flat){
+function buildVecIndex(flat, shapes){
   VEC.segs = new Float64Array(flat);
+  VEC.shapes = new Int32Array(shapes || []);
   const n = flat.length/4;
   const span = Math.max(state.pdfCanvas? state.pdfCanvas.width:2000, state.pdfCanvas? state.pdfCanvas.height:2000);
   const cell = Math.max(12, Math.round(span/240));
@@ -1066,7 +1081,7 @@ function repairCoverage(room, placed, rule, mm, ang, cands){
     if(!coveredAt(idx0, pts[i].x, pts[i].y, ang, rad[i], model)) uncSet.add(i);
   if(!uncSet.size) return [];
 
-  const valid = p => pointInPoly(p, room.polygon) && distToPoly(p, room.polygon) >= minWall;
+  const valid = p => pointInPoly(p, room.polygon) && distToPoly(p, room.polygon) >= minWall && !blockedAt(room, p);
   // an uncovered point is also somewhere a head could go, so offer them
   let step=0;
   for(const i of uncSet){
@@ -1333,6 +1348,123 @@ function onTilePoint(h, t, fracs, mm){
   return near(r.x, t.u, axisFracs(t.u,t.v,fracs)) && near(r.y, t.v, axisFracs(t.v,t.u,fracs));
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Where a head cannot go.
+   On the as-built drawings heads never sit on a light fitting, a grille or
+   anything else in the ceiling. Two things mark such a spot: in a tile
+   ceiling, a tile with something drawn inside it; and anywhere, an area the
+   designer has marked, kept clear by a set distance. This keeps heads off
+   fittings. It does not model a fitting shadowing the spray.
+   ────────────────────────────────────────────────────────────── */
+const OBST = {clearMm:300, minSpanMm:100, edgeTolMm:25, maxShare:0.5};
+const OCC_CACHE = new Map();
+
+function obstacleClearMm(){ return state.doc.obstacleClearMm ?? OBST.clearMm; }
+
+function tileCell(p, t){
+  const r=rotTo(p, t.ang);
+  const fu=(r.x-t.u.origin)/t.u.P, fv=(r.y-t.v.origin)/t.v.P;
+  const i=Math.floor(fu), j=Math.floor(fv);
+  return {i, j, fu:fu-i, fv:fv-j, key:i+","+j};
+}
+function tileCellPoly(t, key){
+  const [i,j]=key.split(",").map(Number);
+  const u0=t.u.origin+i*t.u.P, v0=t.v.origin+j*t.v.P;
+  return [[u0,v0],[u0+t.u.P,v0],[u0+t.u.P,v0+t.v.P],[u0,v0+t.v.P]].map(([x,y])=>rotFrom({x,y}, t.ang));
+}
+
+/* Tiles with a fitting in them. A fitting is drawn as a closed outline (a
+   panel, a grille, a downlight) sitting within a tile or two. Open linework
+   is never a fitting: a dashed outline of something overhead, a light
+   spread, a building grid line all cross tiles without closing. An outline
+   that is the tile itself is the grid, and anything bigger than two tiles
+   is a room, a bulkhead or furniture. Where most of the room comes out
+   taken, the tiles are patterned, and the result is set aside rather than
+   trusted. The designer's own marks on a tile always win. */
+function tileOccupancy(room){
+  if(!isTiled(room) || room.tileOcc===false) return null;
+  const mm=mmPerPx(); if(!mm) return null;
+  const t=detectTiles(room); if(!t) return null;
+  const xs=room.polygon.map(q=>q.x), ys=room.polygon.map(q=>q.y);
+  const bx0=Math.min(...xs), bx1=Math.max(...xs), by0=Math.min(...ys), by1=Math.max(...ys);
+  const marks=room.tileMarks||{};
+  const sig=[t.ang,t.u.origin,t.u.P,t.v.origin,t.v.P,VEC.count,VEC.shapes.length,bx0,bx1,by0,by1,xs.length,JSON.stringify(marks)].join("|");
+  const hit=OCC_CACHE.get(room.id);
+  if(hit && hit.sig===sig) return hit.res;
+
+  const tol=OBST.edgeTolMm/mm, minSpan=OBST.minSpanMm/mm;
+  const found=new Set();
+  const S=VEC.segs, SH=VEC.shapes, n=VEC.ready ? VEC.count : 0;
+  for(let k=0; n && k<SH.length; k+=2){
+    const a=SH[k], b=Math.min(SH[k+1], n);
+    if(b-a<2) continue;
+    if(S[a*4]<bx0 || S[a*4]>bx1 || S[a*4+1]<by0 || S[a*4+1]>by1) continue;
+    let u0=Infinity, u1=-Infinity, v0=Infinity, v1=-Infinity;
+    for(let s=a; s<b; s++) for(const e of [0,2]){
+      const r=rotTo({x:S[s*4+e], y:S[s*4+e+1]}, t.ang);
+      if(r.x<u0) u0=r.x; if(r.x>u1) u1=r.x; if(r.y<v0) v0=r.y; if(r.y>v1) v1=r.y;
+    }
+    if(u1-u0<minSpan || v1-v0<minSpan) continue;
+    const i0=Math.floor((u0+tol-t.u.origin)/t.u.P), i1=Math.floor((u1-tol-t.u.origin)/t.u.P);
+    const j0=Math.floor((v0+tol-t.v.origin)/t.v.P), j1=Math.floor((v1-tol-t.v.origin)/t.v.P);
+    if(i1<i0 || j1<j0 || i1-i0>1 || j1-j0>1) continue;
+    if(i0===i1 && j0===j1){
+      const U0=t.u.origin+i0*t.u.P, V0=t.v.origin+j0*t.v.P;
+      if(Math.abs(u0-U0)<tol && Math.abs(u1-U0-t.u.P)<tol && Math.abs(v0-V0)<tol && Math.abs(v1-V0-t.v.P)<tol) continue;
+    }
+    for(let i=i0;i<=i1;i++) for(let j=j0;j<=j1;j++) found.add(i+","+j);
+  }
+  const tilesInRoom = polyArea(room.polygon)/(t.u.P*t.v.P);
+  const patterned = found.size > Math.max(4, tilesInRoom*OBST.maxShare);
+  const taken = patterned ? new Set() : new Set(found);
+  for(const [key,v] of Object.entries(marks)){ if(v) taken.add(key); else taken.delete(key); }
+  const res = {t, taken, found: found.size, patterned};
+  OCC_CACHE.set(room.id, {sig, res});
+  return res;
+}
+
+function blockedAt(room, p){
+  const obs=page().obstacles;
+  if(obs && obs.length){
+    const mm=mmPerPx();
+    const clear = mm ? obstacleClearMm()/mm : 0;
+    for(const o of obs) if(pointInPoly(p, o.polygon) || distToPoly(p, o.polygon) < clear) return true;
+  }
+  const occ=tileOccupancy(room);
+  return !!(occ && occ.taken.size && occ.taken.has(tileCell(p, occ.t).key));
+}
+
+function obstRect(a, b){
+  const x0=Math.min(a.x,b.x), x1=Math.max(a.x,b.x), y0=Math.min(a.y,b.y), y1=Math.max(a.y,b.y);
+  return [{x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1}];
+}
+
+/* Rooms an obstruction can push heads around in: any within its clearance. */
+function roomsNear(poly){
+  const mm=mmPerPx(), c = mm ? obstacleClearMm()/mm : 0;
+  const box = q => { const xs=q.map(p=>p.x), ys=q.map(p=>p.y);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+  const [a0,b0,a1,b1]=box(poly);
+  return page().rooms.filter(r=>{ const [x0,y0,x1,y1]=box(r.polygon);
+    return x0<=a1+c && x1>=a0-c && y0<=b1+c && y1>=b0-c; });
+}
+
+/* The designer's call on one tile: taken if it reads free, free if taken. */
+function toggleTileMark(room, p){
+  const o=tileOccupancy(room); if(!o) return null;
+  const key=tileCell(p, o.t).key;
+  const marks = room.tileMarks || (room.tileMarks={});
+  marks[key] = !o.taken.has(key);
+  return {key, taken:marks[key]};
+}
+
+/* Every tile point on one axis within a tile of this position. */
+function tileStops(val, grid, fracs){
+  const k=Math.floor((val-grid.origin)/grid.P), out=[];
+  for(let kk=k-1; kk<=k+1; kk++) for(const f of fracs) out.push(grid.origin+(kk+f)*grid.P);
+  return out;
+}
+
 function snapToTiles(room, heads, rule, mm, ang){
   if(!isTiled(room)) return {aligned:0, total:heads.length, grid:null};
   const t=detectTiles(room);
@@ -1365,21 +1497,35 @@ function snapToTiles(room, heads, rule, mm, ang){
 
   let aligned=0;
   const maxMove = Math.min(t.u.P, t.v.P);          // never shove a head more than one tile
+  const fu=axisFracs(t.u, t.v, fracs), fv=axisFracs(t.v, t.u, fracs);
   for(const h of heads){
     if(h.locked && !h.auto) continue;
     const r=rotTo(h, ang);
-    const su=nearestTileStop(r.x, t.u, axisFracs(t.u, t.v, fracs));
-    const sv=nearestTileStop(r.y, t.v, axisFracs(t.v, t.u, fracs));
+    const su=nearestTileStop(r.x, t.u, fu);
+    const sv=nearestTileStop(r.y, t.v, fv);
     if(!su||!sv) continue;
-    if(su.d>maxMove || sv.d>maxMove) continue;
-    const w=rotFrom({x:su.pos, y:sv.pos}, ang);
-    if(!pointInPoly(w, room.polygon) || distToPoly(w, room.polygon) < minWall) continue;
+    /* The nearest tile point is the one to take, unless there is a fitting
+       in that tile. Then the points in the tiles around it are next, nearest
+       first, up to a tile and a half away. */
+    let opts=[{u:su.pos, v:sv.pos, du:su.d, dv:sv.d, mu:maxMove, mv:maxMove}];
+    if(blockedAt(room, rotFrom({x:su.pos, y:sv.pos}, ang))){
+      opts=[];
+      for(const pu of tileStops(r.x, t.u, fu)) for(const pv of tileStops(r.y, t.v, fv))
+        opts.push({u:pu, v:pv, du:Math.abs(pu-r.x), dv:Math.abs(pv-r.y), mu:1.5*t.u.P, mv:1.5*t.v.P});
+      opts.sort((a,b)=>Math.hypot(a.du,a.dv)-Math.hypot(b.du,b.dv));
+    }
     const others=heads.filter(o=>o!==h);
-    if(others.some(o=>Math.hypot(o.x-w.x,o.y-w.y) < minSp)) continue;
-    const trial=[...others, {x:w.x, y:w.y}];
-    if(!covered(trial)) continue;                  // alignment never costs coverage
-    h.x=w.x; h.y=w.y;
-    aligned++;
+    for(const o of opts){
+      if(o.du>o.mu || o.dv>o.mv) continue;
+      const w=rotFrom({x:o.u, y:o.v}, ang);
+      if(!pointInPoly(w, room.polygon) || distToPoly(w, room.polygon) < minWall) continue;
+      if(blockedAt(room, w)) continue;
+      if(others.some(x=>Math.hypot(x.x-w.x,x.y-w.y) < minSp)) continue;
+      if(!covered([...others, {x:w.x, y:w.y}])) continue;   // alignment never costs coverage
+      h.x=w.x; h.y=w.y;
+      aligned++;
+      break;
+    }
   }
   return {aligned, total:heads.length, grid:t};
 }
@@ -1452,7 +1598,7 @@ function pullHeads(room, heads, rule, mm, ang){
 
     let done=false;
     for(const o of options){
-      if(!pointInPoly(o.w, room.polygon) || distToPoly(o.w, room.polygon) < minWall) continue;
+      if(!pointInPoly(o.w, room.polygon) || distToPoly(o.w, room.polygon) < minWall || blockedAt(room, o.w)) continue;
       if(heads.some(x=>x!==o.h && Math.hypot(x.x-o.w.x, x.y-o.w.y) < minSp)) continue;
       const old={x:o.h.x, y:o.h.y};
       o.h.x=o.w.x; o.h.y=o.w.y;
@@ -1538,7 +1684,7 @@ function autoHeads(room, keep){
   const areaM2 = polyArea(room.polygon)*mm*mm/1e6;
   const minWall = (rule.minWallDist??0.1)*1000/mm;
   const minSp = rule.minSpacing*1000/mm;
-  const valid = p => pointInPoly(p, room.polygon) && distToPoly(p, room.polygon) >= minWall;
+  const valid = p => pointInPoly(p, room.polygon) && distToPoly(p, room.polygon) >= minWall && !blockedAt(room, p);
 
   // a grid point outside the room is walked back in along the grid axes
   const nudge = P => {
@@ -2170,6 +2316,11 @@ function analyse(room){
   res.tightHeads = tight.map(h=>h.id);
   if(tight.length) res.flags.push(`${tight.length} head${tight.length>1?"s":""} closer than ${(r.minWallDist??0.1)} m to a wall`);
 
+  // heads on a fitting: in a taken tile, or too near a marked obstruction
+  const onFit = heads.filter(h => blockedAt(room, h));
+  res.blockedHeads = onFit.map(h=>h.id);
+  if(onFit.length) res.flags.push(`${onFit.length} head${onFit.length>1?"s":""} in a tile with a fitting drawn in it, or within ${obstacleClearMm()} mm of a marked obstruction`);
+
   // wall distance: every boundary point must be within a head's reach
   const stepPx = 300/mm;
   let worstWall=0;
@@ -2469,6 +2620,41 @@ function draw(){
     else { const q=toScreen(pts[0]); ctx.beginPath(); ctx.arc(q.x,q.y,4,0,7); ctx.fillStyle="#7b9cff"; ctx.fill(); }
   }
 
+  // tiles with a fitting, in the selected room, or everywhere while marking
+  if(mm){
+    const marking = state.mode==="obst";
+    for(const room of p.rooms){
+      if(!(marking || state.selRoom===room.id)) continue;
+      const o=tileOccupancy(room); if(!o || !o.taken.size) continue;
+      ctx.save();
+      ctx.fillStyle="rgba(230,140,40,.22)"; ctx.strokeStyle="rgba(230,140,40,.7)"; ctx.lineWidth=1;
+      for(const key of o.taken){
+        const q=tileCellPoly(o.t, key).map(toScreen);
+        ctx.beginPath(); q.forEach((s,i)=> i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y)); ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  // marked obstructions, with the clearance heads keep from them
+  if(p.obstacles.length || (state.drag && state.drag.kind==="obst")){
+    ctx.save();
+    const clear = mm ? obstacleClearMm()/mm*v.zoom : 0;
+    const boxes = p.obstacles.map(o=>o.polygon);
+    if(state.drag && state.drag.kind==="obst") boxes.push(obstRect(state.drag.a, state.drag.b));
+    for(const poly of boxes){
+      const q=poly.map(toScreen);
+      const path=()=>{ ctx.beginPath(); q.forEach((s,i)=> i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y)); ctx.closePath(); };
+      if(clear>0){ path(); ctx.lineJoin="round"; ctx.lineWidth=clear*2; ctx.strokeStyle="rgba(192,90,192,.10)"; ctx.stroke(); }
+      path(); ctx.fillStyle="rgba(192,90,192,.22)"; ctx.fill();
+      ctx.lineWidth=1.4; ctx.strokeStyle="#c05ac0"; ctx.setLineDash([5,3]); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(q[0].x,q[0].y); ctx.lineTo(q[2].x,q[2].y); ctx.moveTo(q[1].x,q[1].y); ctx.lineTo(q[3].x,q[3].y);
+      ctx.lineWidth=1; ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   // heads
   const violating = new Set();
   for(const room of p.rooms){
@@ -2550,8 +2736,8 @@ function draw(){
         ctx.fillStyle="#fff"; ctx.font="600 11px 'IBM Plex Mono', monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
         ctx.fillText(String(i+1), t.x, t.y);
       });
-      // heads too close to a wall
-      for(const id of (a.tightHeads||[])){
+      // heads too close to a wall, or on a fitting
+      for(const id of [...(a.tightHeads||[]), ...(a.blockedHeads||[])]){
         const h=p.heads.find(x=>x.id===id); if(!h) continue;
         const t=toScreen(h); ctx.strokeStyle="#e4573d"; ctx.lineWidth=2; ctx.setLineDash([3,3]);
         ctx.beginPath(); ctx.arc(t.x,t.y,13,0,7); ctx.stroke(); ctx.setLineDash([]);
@@ -3076,6 +3262,15 @@ view.addEventListener("pointerdown", e=>{
     }
     // clicking outside a room just pans
   }
+  if(state.mode==="obst" && e.button===0){
+    if(e.altKey){
+      const o=[...page().obstacles].reverse().find(o=>pointInPoly(wp, o.polygon));
+      if(o){ snapshot(); removeObstacle(o); }
+      return;
+    }
+    state.drag={kind:"obst", a:wp, b:wp, sp};
+    return;
+  }
   // default: pan
   state.drag={kind:"pan", sx:sp.x, sy:sp.y, tx:state.view.tx, ty:state.view.ty};
   view.classList.add("panning");
@@ -3105,6 +3300,7 @@ view.addEventListener("pointermove", e=>{
     else if(d.kind==="vertex"){ d.room.polygon[d.vi]={x:wp.x,y:wp.y}; }
     else if(d.kind==="head"){ d.head.x=wp.x+d.dx; d.head.y=wp.y+d.dy; d.head.auto=false; d.head.locked=true; }
     else if(d.kind==="legend"){ const L=page().legend; L.x=wp.x+d.dx; L.y=wp.y+d.dy; }
+    else if(d.kind==="obst"){ d.b=wp; }
   }
   if(state.mdraft) updateLenCell();
   if(d || state.draft || state.calib || state.mdraft || state.snapHit) draw();
@@ -3116,6 +3312,7 @@ view.addEventListener("pointerup", ()=>{
   if(d && (d.kind==="vertex")){ regenerateHeads(d.room); syncPanels(); }
   if(d && d.kind==="head"){ save(); syncPanels(); }
   if(d && d.kind==="legend") save();
+  if(d && d.kind==="obst") finishObstacle(d);
   state.drag=null; view.classList.remove("panning"); draw(); scheduleDetail();
 });
 
@@ -3182,6 +3379,7 @@ document.addEventListener("keydown", e=>{
   else if(k==="h") setMode("head");
   else if(k==="o") setMode("origin");
   else if(k==="t") setMode("tile");
+  else if(k==="b") setMode("obst");
   else if(k==="0") fitView();
   else if(e.key==="PageUp"){ e.preventDefault(); gotoPage(state.pageNum-1); }
   else if(e.key==="PageDown"){ e.preventDefault(); gotoPage(state.pageNum+1); }
@@ -3199,7 +3397,7 @@ function setMode(m){
   document.querySelectorAll(".tool").forEach(b=>b.classList.toggle("on", b.dataset.mode===m));
   if(m!=="measure"){ state.mdraft=null; }
   if(m!=="fill" && FILL.on) fillCancel(false);
-  view.classList.toggle("drawing", m==="room"||m==="calibrate"||m==="origin"||m==="head"||m==="measure"||m==="fill"||m==="tile");
+  view.classList.toggle("drawing", m==="room"||m==="calibrate"||m==="origin"||m==="head"||m==="measure"||m==="fill"||m==="tile"||m==="obst");
   updateLenCell();
   const hints={
     pan:"Click a head to see its coverage and wall offsets, drag it to move. C shows every head's coverage at once",
@@ -3210,7 +3408,8 @@ function setMode(m){
     vertex:"Drag the corners of the selected room",
     head:"Click inside a room to add a head, drag to move it, Alt+click to delete",
     origin:"Click the point your CAD coordinates are measured from",
-    tile:"Click a corner of the ceiling grid in the selected room to set it by hand"
+    tile:"Click a corner of the ceiling grid in the selected room to set it by hand",
+    obst:"Drag a box over a fitting heads must keep clear of, Alt+click a box to remove it. Click a tile to mark it taken or free"
   };
   document.getElementById("stHint").textContent=hints[m];
   draw();
@@ -3254,6 +3453,38 @@ function setCeiling(room, kind){
     setMode("tile");
     toast("Tile ceiling, but no grid is drawn in this room. Click one tile corner and the heads will line up to it.");
   }
+}
+
+/* Obstruct tool. A drag marks a box heads keep clear of; a click on a tile
+   in a tile-ceiling room flips that tile between taken and free. */
+function finishObstacle(d){
+  const end=toScreen(d.b);
+  if(Math.hypot(end.x-d.sp.x, end.y-d.sp.y) < 5){
+    const room=roomAt(d.a);
+    if(!room || !tileOccupancy(room)){
+      toast("Drag a box over the fitting. A click only marks a tile, in a tile-ceiling room with its grid found.");
+      return;
+    }
+    snapshot();
+    const r=toggleTileMark(room, d.a);
+    regenerateHeads(room); syncPanels(); draw();
+    toast(r.taken ? "Tile marked as taken." : "Tile marked as free.");
+    return;
+  }
+  snapshot();
+  const o={id:uid("o_"), polygon:obstRect(d.a, d.b)};
+  page().obstacles.push(o);
+  relayNear(o.polygon);
+}
+function removeObstacle(o){
+  const p=page();
+  p.obstacles=p.obstacles.filter(x=>x!==o);
+  relayNear(o.polygon);
+  toast("Obstruction removed.");
+}
+function relayNear(poly){
+  roomsNear(poly).forEach(r=>regenerateHeads(r));
+  save(); syncPanels(); draw();
 }
 
 /* After a room outline is made, ask what the ceiling is before laying
@@ -3612,6 +3843,11 @@ function renderProps(){
         ${room.tileManual?`<button class="btn" id="pTileAuto">Back to auto</button>`:""}
       </div>
       <div class="stat"><span>Heads on a tile point</span><b class="${al===hs.length&&hs.length?"good":""}">${al} of ${hs.length}</b></div>
+      ${t? (()=>{ const o=tileOccupancy(room); const nm=Object.keys(room.tileMarks||{}).length;
+        return `<div class="field" style="margin:7px 0 0"><label style="width:auto;flex:1">Keep heads out of tiles with a fitting</label><input type="checkbox" id="pTileOcc" ${room.tileOcc!==false?"checked":""} style="flex:none;width:auto"></div>
+        ${o? `<div class="stat"><span>Tiles with a fitting</span><b>${o.taken.size}${nm?` · ${nm} set by hand`:""}</b></div>` : ""}
+        ${o&&o.patterned? `<p class="hint" style="margin:4px 0 0">Something is drawn in nearly every tile here, so it reads as a pattern and is set aside. Mark the taken tiles by hand.</p>` : ""}
+        ${o? `<p class="hint" style="margin:4px 0 0">A tile counts as taken when a closed outline — a panel, grille or downlight — is drawn inside it. With the Obstruct tool (B), click a tile to mark it taken or free.${nm?` <a href="#" id="pTileMarksReset">Forget the hand marks</a>.`:""}</p>` : ""}`; })() : ""}
       <div class="field" style="margin-top:7px"><label style="width:auto;flex:1">Along the long side of the tile</label></div>
       <div class="rowbtns" style="margin-top:2px">
         ${[["1/3",1/3],["1/2",1/2],["2/3",2/3],["edge",0]].map(([lbl,f])=>
@@ -3645,6 +3881,17 @@ function renderProps(){
     </div>
   </div>
 
+  <h3 class="sec">Obstructions</h3>
+  <div class="block">
+    <div class="stat"><span>Marked on this page</span><b>${p.obstacles.length}</b></div>
+    <div class="field"><label>Keep heads clear by</label><input type="number" id="pObsClr" step="50" min="0" value="${obstacleClearMm()}"><span class="unit">mm</span></div>
+    <div class="rowbtns">
+      <button class="btn ${state.mode==="obst"?"primary":""}" id="pObsTool">Mark obstructions</button>
+      ${p.obstacles.length?`<button class="btn" id="pObsClear">Clear all</button>`:""}
+    </div>
+    <p class="hint">Drag a box over a light fitting, grille or anything else a head must not sit on; heads keep this distance from its edge. Alt+click a box to remove it.</p>
+  </div>
+
   ${(()=>{ const h=page().heads.find(x=>x.id===state.selHead && x.roomId===room.id); if(!h) return "";
     const opts=Object.entries(devices()).map(([id,d])=>`<option value="${id}" ${devId(h.type)===id?"selected":""}>${esc(d.group)} — ${esc(d.label)}</option>`).join("");
     return `<h3 class="sec">Selected device</h3>
@@ -3660,7 +3907,7 @@ function renderProps(){
   </ul>
 
   <div class="rowbtns"><button class="btn" id="pDel">Delete room</button></div>
-  <p class="hint">These checks only test the figures entered in this tool. Obstructions, beams, light fittings and ceiling exceptions are not considered — the designer signs it off.</p>`;
+  <p class="hint">These checks only test the figures entered in this tool. Heads are kept off marked obstructions and tiles with a fitting, but a fitting or beam shadowing the spray, and ceiling exceptions, are not considered — the designer signs it off.</p>`;
 
   const bind=(id,ev,fn)=>{const n=document.getElementById(id); if(n) n.addEventListener(ev,fn);};
   bind("pName","input",e=>{room.name=e.target.value; save(); renderRooms(); draw();});
@@ -3683,6 +3930,19 @@ function renderProps(){
   bind("pTilePU","change",e=>{ if(room.tileManual){ room.tileManual.pu=parseFloat(e.target.value)||600; regenerateHeads(room); syncPanels(); draw(); } });
   bind("pTilePV","change",e=>{ if(room.tileManual){ room.tileManual.pv=parseFloat(e.target.value)||1200; regenerateHeads(room); syncPanels(); draw(); } });
   bind("pTileX","change",e=>{ room.tileExtra=e.target.checked; regenerateHeads(room); syncPanels(); draw(); });
+  bind("pTileOcc","change",e=>{ snapshot(); room.tileOcc=e.target.checked; regenerateHeads(room); syncPanels(); draw(); });
+  bind("pTileMarksReset","click",e=>{ e.preventDefault(); snapshot(); room.tileMarks={}; regenerateHeads(room); syncPanels(); draw(); });
+  bind("pObsTool","click",()=>{ setMode("obst"); syncPanels(); });
+  bind("pObsClr","change",e=>{
+    const v=parseFloat(e.target.value);
+    state.doc.obstacleClearMm = Number.isFinite(v)&&v>=0 ? v : OBST.clearMm;
+    page().rooms.forEach(r=>regenerateHeads(r)); save(); syncPanels(); draw();
+  });
+  bind("pObsClear","click",()=>{
+    snapshot(); page().obstacles=[];
+    page().rooms.forEach(r=>regenerateHeads(r)); save(); syncPanels(); draw();
+    toast("Obstructions cleared.");
+  });
   document.querySelectorAll("#paneProps [data-ceil]").forEach(b=>b.onclick=()=>{
     if(ceilingOf(room)===b.dataset.ceil) return;
     snapshot();

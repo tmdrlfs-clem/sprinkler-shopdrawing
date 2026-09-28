@@ -81,6 +81,26 @@ of stair steps that tip it further. A room can be switched to "along the
 main walls" (longest-run detection, weighted by length squared) or to the
 bounding box, per room.
 
+### Where a head cannot go
+
+`blockedAt` is the one test every placement path uses — grid nudge,
+repair, pull and tile snap — and the checks flag any head that fails it.
+Two things block a spot:
+
+- **A tile with a fitting in it.** A fitting is a *closed* outline (panel,
+  grille, downlight) inside a tile or two; `extractVectors` records which
+  runs of segments close, as `VEC.shapes`. Open linework is never a
+  fitting: architects' dashed outlines and light-spread fans are open, and
+  come through as loose dashes, not as a dash style. An outline that is the
+  tile itself is the grid. If over half a room's tiles read as taken, it is
+  a pattern and is set aside. The designer's clicks (`room.tileMarks`)
+  override what was read.
+- **A marked obstruction** (`page().obstacles`), kept clear by
+  `obstacleClearMm()`.
+
+This keeps heads off fittings. It does not model a fitting or beam
+shadowing the spray.
+
 ### Coverage rule
 
 A point counts as covered when it is inside a head's S×S square, S being
@@ -112,10 +132,11 @@ must not be presented as though they were. The Rules tab makes the
 designer enter the real figures and tick each class; until a class is
 ticked, every check on it carries a warning. Keep that warning working.
 
-The checks test the figures entered here and nothing else. Obstructions,
-beams, light fittings and ceiling exceptions are not modelled, and the
-tool says so where a designer will read it. Do not add wording that
-implies compliance.
+The checks test the figures entered here and nothing else. Heads are kept
+off marked obstructions and tiles with a fitting, but spray shadowing by
+fittings and beams, and ceiling exceptions, are not modelled, and the tool
+says so where a designer will read it. Do not add wording that implies
+compliance.
 
 ## Things that have bitten before
 
@@ -130,5 +151,9 @@ implies compliance.
   early around the first blob.
 - **A room is one room.** One fill, one Apply, one room. Unconnected
   patches are reported, never quietly turned into extra rooms.
+- **Some PDFs carry the architecture as a picture.** An as-built can have
+  only the sprinkler layer as vectors, with the ceiling underneath embedded
+  as an image. No grid and no fittings can be read from that; the tile
+  grid has to be set by hand and fittings marked.
 - **Annotation coordinates are base render pixels.** The sharp re-render
   at high zoom is display only; nothing that is measured may depend on it.

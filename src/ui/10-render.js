@@ -260,6 +260,41 @@ function draw(){
     else { const q=toScreen(pts[0]); ctx.beginPath(); ctx.arc(q.x,q.y,4,0,7); ctx.fillStyle="#7b9cff"; ctx.fill(); }
   }
 
+  // tiles with a fitting, in the selected room, or everywhere while marking
+  if(mm){
+    const marking = state.mode==="obst";
+    for(const room of p.rooms){
+      if(!(marking || state.selRoom===room.id)) continue;
+      const o=tileOccupancy(room); if(!o || !o.taken.size) continue;
+      ctx.save();
+      ctx.fillStyle="rgba(230,140,40,.22)"; ctx.strokeStyle="rgba(230,140,40,.7)"; ctx.lineWidth=1;
+      for(const key of o.taken){
+        const q=tileCellPoly(o.t, key).map(toScreen);
+        ctx.beginPath(); q.forEach((s,i)=> i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y)); ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  // marked obstructions, with the clearance heads keep from them
+  if(p.obstacles.length || (state.drag && state.drag.kind==="obst")){
+    ctx.save();
+    const clear = mm ? obstacleClearMm()/mm*v.zoom : 0;
+    const boxes = p.obstacles.map(o=>o.polygon);
+    if(state.drag && state.drag.kind==="obst") boxes.push(obstRect(state.drag.a, state.drag.b));
+    for(const poly of boxes){
+      const q=poly.map(toScreen);
+      const path=()=>{ ctx.beginPath(); q.forEach((s,i)=> i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y)); ctx.closePath(); };
+      if(clear>0){ path(); ctx.lineJoin="round"; ctx.lineWidth=clear*2; ctx.strokeStyle="rgba(192,90,192,.10)"; ctx.stroke(); }
+      path(); ctx.fillStyle="rgba(192,90,192,.22)"; ctx.fill();
+      ctx.lineWidth=1.4; ctx.strokeStyle="#c05ac0"; ctx.setLineDash([5,3]); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(q[0].x,q[0].y); ctx.lineTo(q[2].x,q[2].y); ctx.moveTo(q[1].x,q[1].y); ctx.lineTo(q[3].x,q[3].y);
+      ctx.lineWidth=1; ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   // heads
   const violating = new Set();
   for(const room of p.rooms){
@@ -341,8 +376,8 @@ function draw(){
         ctx.fillStyle="#fff"; ctx.font="600 11px 'IBM Plex Mono', monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
         ctx.fillText(String(i+1), t.x, t.y);
       });
-      // heads too close to a wall
-      for(const id of (a.tightHeads||[])){
+      // heads too close to a wall, or on a fitting
+      for(const id of [...(a.tightHeads||[]), ...(a.blockedHeads||[])]){
         const h=p.heads.find(x=>x.id===id); if(!h) continue;
         const t=toScreen(h); ctx.strokeStyle="#e4573d"; ctx.lineWidth=2; ctx.setLineDash([3,3]);
         ctx.beginPath(); ctx.arc(t.x,t.y,13,0,7); ctx.stroke(); ctx.setLineDash([]);

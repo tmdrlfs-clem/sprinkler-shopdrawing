@@ -89,12 +89,13 @@ export function loadCore({ scale = 12.37, coverage = "rect" } = {}) {
 
     /* Feed the sandbox a set of PDF line segments, as the vector reader
        would after parsing a page. Coordinates are render pixels. */
-    setVectors(flat) {
+    setVectors(flat, shapes = []) {
       ctx.__flat = Array.from(flat);
-      run(`buildVecIndex(__flat); TILE_CACHE.clear();`);
+      ctx.__shapes = Array.from(shapes);
+      run(`buildVecIndex(__flat, __shapes); TILE_CACHE.clear();`);
     },
     clearCaches() {
-      run(`RECT_CACHE.clear(); ANGLE_CACHE.clear(); SAMPLE_CACHE.clear(); TILE_CACHE.clear();`);
+      run(`RECT_CACHE.clear(); ANGLE_CACHE.clear(); SAMPLE_CACHE.clear(); TILE_CACHE.clear(); OCC_CACHE.clear();`);
     },
 
     /* Put a room on the page and lay heads in it, the way the app does. */

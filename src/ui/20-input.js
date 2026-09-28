@@ -153,6 +153,15 @@ view.addEventListener("pointerdown", e=>{
     }
     // clicking outside a room just pans
   }
+  if(state.mode==="obst" && e.button===0){
+    if(e.altKey){
+      const o=[...page().obstacles].reverse().find(o=>pointInPoly(wp, o.polygon));
+      if(o){ snapshot(); removeObstacle(o); }
+      return;
+    }
+    state.drag={kind:"obst", a:wp, b:wp, sp};
+    return;
+  }
   // default: pan
   state.drag={kind:"pan", sx:sp.x, sy:sp.y, tx:state.view.tx, ty:state.view.ty};
   view.classList.add("panning");
@@ -182,6 +191,7 @@ view.addEventListener("pointermove", e=>{
     else if(d.kind==="vertex"){ d.room.polygon[d.vi]={x:wp.x,y:wp.y}; }
     else if(d.kind==="head"){ d.head.x=wp.x+d.dx; d.head.y=wp.y+d.dy; d.head.auto=false; d.head.locked=true; }
     else if(d.kind==="legend"){ const L=page().legend; L.x=wp.x+d.dx; L.y=wp.y+d.dy; }
+    else if(d.kind==="obst"){ d.b=wp; }
   }
   if(state.mdraft) updateLenCell();
   if(d || state.draft || state.calib || state.mdraft || state.snapHit) draw();
@@ -193,6 +203,7 @@ view.addEventListener("pointerup", ()=>{
   if(d && (d.kind==="vertex")){ regenerateHeads(d.room); syncPanels(); }
   if(d && d.kind==="head"){ save(); syncPanels(); }
   if(d && d.kind==="legend") save();
+  if(d && d.kind==="obst") finishObstacle(d);
   state.drag=null; view.classList.remove("panning"); draw(); scheduleDetail();
 });
 
@@ -259,6 +270,7 @@ document.addEventListener("keydown", e=>{
   else if(k==="h") setMode("head");
   else if(k==="o") setMode("origin");
   else if(k==="t") setMode("tile");
+  else if(k==="b") setMode("obst");
   else if(k==="0") fitView();
   else if(e.key==="PageUp"){ e.preventDefault(); gotoPage(state.pageNum-1); }
   else if(e.key==="PageDown"){ e.preventDefault(); gotoPage(state.pageNum+1); }
